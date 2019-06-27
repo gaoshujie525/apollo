@@ -127,6 +127,9 @@ Status PathBoundsDecider::Process(
       reference_line_info->SetCandidatePathBoundaries(
           std::move(candidate_path_boundaries));
       ADEBUG << "Completed pullover and fallback path boundaries generation.";
+      *(reference_line_info->mutable_debug()
+            ->mutable_planning_data()
+            ->mutable_pull_over_status()) = *pull_over_status;
       return Status::OK();
     }
   }
@@ -531,8 +534,9 @@ bool PathBoundsDecider::SearchPullOverPosition(
              pull_over_space_length) {
     int j = i;
     bool is_feasible_window = true;
-    while (j >= 0 && std::get<0>(path_bound[i]) - std::get<0>(path_bound[j]) <
-                         pull_over_space_length) {
+    while (j >= 0 &&
+           std::get<0>(path_bound[i]) - std::get<0>(path_bound[j]) <
+               pull_over_space_length) {
       double curr_s = std::get<0>(path_bound[j]);
       double curr_right_bound = std::fabs(std::get<1>(path_bound[j]));
       double curr_road_left_width = 0;
@@ -560,7 +564,17 @@ bool PathBoundsDecider::SearchPullOverPosition(
     if (is_feasible_window) {
       has_a_feasible_window = true;
       const auto& reference_line = reference_line_info.reference_line();
-      const auto& pull_over_point = path_bound[(i + j) / 2];
+      // estimate pull over point to have the vehicle keep same safety distance
+      // to front and back
+      const auto& vehicle_param =
+          VehicleConfigHelper::GetConfig().vehicle_param();
+      const double back_clear_to_total_length_ratio =
+          (0.5 * (kPulloverLonSearchCoeff - 1.0) * vehicle_param.length() +
+           vehicle_param.back_edge_to_center()) /
+          vehicle_param.length() / kPulloverLonSearchCoeff;
+      const auto& pull_over_point = path_bound[static_cast<size_t>(
+          back_clear_to_total_length_ratio * static_cast<double>(i) +
+          (1.0 - back_clear_to_total_length_ratio) * static_cast<double>(j))];
       const double pull_over_s = std::get<0>(pull_over_point);
       const double pull_over_l =
           std::get<1>(pull_over_point) + pull_over_space_width / 2.0;
@@ -583,10 +597,10 @@ bool PathBoundsDecider::SearchPullOverPosition(
       double s = 0.0;
       double l = 0.0;
       auto point = common::util::MakePointENU(pull_over_x, pull_over_y, 0.0);
-      HDMapUtil::BaseMap().GetNearestLaneWithHeading(
-          point, 5.0, pull_over_theta, M_PI_2, &lane, &s, &l);
-      pull_over_theta = lane->Heading(s);
-
+      if (HDMapUtil::BaseMap().GetNearestLaneWithHeading(
+              point, 5.0, pull_over_theta, M_PI_2, &lane, &s, &l) == 0) {
+        pull_over_theta = lane->Heading(s);
+      }
       *pull_over_configuration = std::make_tuple(pull_over_x, pull_over_y,
                                                  pull_over_theta, (i + j) / 2);
       break;
